@@ -68,6 +68,7 @@ public class RedshiftSqlStatementBuilder extends SqlStatementBuilder {
         if (statementStart.matches("(CREATE|DROP) (DATABASE|TABLESPACE) .*")
                 || statementStart.matches("ALTER SYSTEM .*")
                 || statementStart.matches("VACUUM .*")
+                || statementStart.matches("CREATE EXTERNAL TABLE .*")
                 ) {
             executeInTransaction = false;
         }
