@@ -97,7 +97,8 @@ public class JdbcTableSchemaHistory extends SchemaHistory {
 
     @Override
     public boolean exists() {
-        if (!tableFallback) {
+        // Ensure we are using the default table name before checking for the fallback table
+        if (!tableFallback && table.getName().equals("flyway_schema_history")) {
             Table fallbackTable = table.getSchema().getTable("schema_version");
             if (fallbackTable.exists()) {
                 LOG.warn("Could not find schema history table " + table + ", but found " + fallbackTable + " instead." +
@@ -149,7 +150,9 @@ public class JdbcTableSchemaHistory extends SchemaHistory {
 
         // Lock again for databases with no DDL transactions to prevent implicit commits from triggering deadlocks
         // in highly concurrent environments
-        table.lock();
+        if (!database.supportsDdlTransactions()) {
+            table.lock();
+        }
 
         try {
             String versionStr = version == null ? null : version.toString();
@@ -159,7 +162,7 @@ public class JdbcTableSchemaHistory extends SchemaHistory {
                     installedRank, versionStr, description, type.name(), script, checksum, installedBy,
                     executionTime, success);
 
-            LOG.debug("MetaData table " + table + " successfully updated to reflect changes");
+            LOG.debug("Schema history table " + table + " successfully updated to reflect changes");
         } catch (SQLException e) {
             throw new FlywaySqlException("Unable to insert row for version '" + version + "' in Schema History table " + table, e);
         }

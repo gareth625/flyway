@@ -19,9 +19,9 @@ import org.flywaydb.core.api.configuration.FlywayConfiguration;
 import org.flywaydb.core.api.logging.Log;
 import org.flywaydb.core.api.logging.LogFactory;
 import org.flywaydb.core.internal.database.Connection;
+import org.flywaydb.core.internal.database.Schema;
 import org.flywaydb.core.internal.database.Table;
 import org.flywaydb.core.internal.exception.FlywaySqlException;
-import org.flywaydb.core.internal.database.Schema;
 
 import java.sql.SQLException;
 import java.util.concurrent.Callable;
@@ -32,7 +32,8 @@ import java.util.concurrent.Callable;
 public class SQLServerConnection extends Connection<SQLServerDatabase> {
     private static final Log LOG = LogFactory.getLog(SQLServerConnection.class);
 
-    private final String originalDatabase;
+    private final String originalDatabaseName;
+    private final String originalAnsiNulls;
 
     /**
      * Whether the warning message has already been printed.
@@ -50,10 +51,22 @@ public class SQLServerConnection extends Connection<SQLServerDatabase> {
 
         );
         try {
-            originalDatabase = jdbcTemplate.queryForString("SELECT DB_NAME()");
+            originalDatabaseName = jdbcTemplate.queryForString("SELECT DB_NAME()");
         } catch (SQLException e) {
             throw new FlywaySqlException("Unable to determine current database", e);
         }
+        try {
+            originalAnsiNulls = database.isAzure() ? null :
+                    jdbcTemplate.queryForString("DECLARE @ANSI_NULLS VARCHAR(3) = 'OFF';\n" +
+                    "IF ( (32 & @@OPTIONS) = 32 ) SET @ANSI_NULLS = 'ON';\n" +
+                    "SELECT @ANSI_NULLS AS ANSI_NULLS;");
+        } catch (SQLException e) {
+            throw new FlywaySqlException("Unable to determine ANSI NULLS state", e);
+        }
+    }
+
+    public void setCurrentDatabase(String databaseName) throws SQLException {
+        jdbcTemplate.execute("USE " + database.quote(databaseName));
     }
 
 
@@ -64,8 +77,11 @@ public class SQLServerConnection extends Connection<SQLServerDatabase> {
 
     @Override
     public void doChangeCurrentSchemaTo(String schema) throws SQLException {
-        // Always restore original database in case it was changed in a previous migration or callback.
-        jdbcTemplate.execute("USE " + database.quote(originalDatabase));
+        // Always restore original database and connection state in case they were changed in a previous migration or callback.
+        setCurrentDatabase(originalDatabaseName);
+        if (!database.isAzure()) {
+            jdbcTemplate.execute("SET ANSI_NULLS " + originalAnsiNulls);
+        }
 
         if (!schemaMessagePrinted) {
             LOG.info("SQLServer does not support setting the schema for the current session. Default schema NOT changed to " + schema);
@@ -77,11 +93,11 @@ public class SQLServerConnection extends Connection<SQLServerDatabase> {
 
     @Override
     public Schema getSchema(String name) {
-        return new SQLServerSchema(jdbcTemplate, database, name);
+        return new SQLServerSchema(jdbcTemplate, database, originalDatabaseName, name);
     }
 
     @Override
     public <T> T lock(Table table, Callable<T> callable) {
-        return new SQLServerApplicationLockTemplate(jdbcTemplate, table.toString().hashCode()).execute(callable);
+        return new SQLServerApplicationLockTemplate(this, jdbcTemplate, originalDatabaseName, table.toString().hashCode()).execute(callable);
     }
 }
